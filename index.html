@@ -134,6 +134,10 @@
         <h2>Aujourd'hui</h2>
         <div id="todayLogs"></div>
       </div>
+      <div class="card">
+        <h2>Semaine en cours</h2>
+        <div id="weekTable" style="overflow-x:auto;"></div>
+      </div>
       <button type="button" class="btn-outline" id="btnLogoutEmp">Changer d'employé</button>
     </div>
 
@@ -158,7 +162,8 @@
 
       <div id="admin-workers">
         <div class="card">
-          <h2>Ajouter un employé</h2>
+          <h2 id="workerFormTitle">Ajouter un employé</h2>
+          <input type="hidden" id="editOriginalCode" value="">
           <label>Code (unique)</label>
           <input type="text" id="newCode" placeholder="EMP001" autocapitalize="characters">
           <label>Nom complet</label>
@@ -172,6 +177,7 @@
           <label>Salaire / heure ($)</label>
           <input type="number" id="newSalaire" placeholder="25.00" step="0.01" min="0" inputmode="decimal">
           <button type="button" class="btn-success" id="btnAddWorker">Ajouter</button>
+          <button type="button" class="btn-outline hidden" id="btnCancelEdit">Annuler la modification</button>
         </div>
         <div class="card">
           <h2>Liste des employés</h2>
@@ -440,20 +446,84 @@
     var container = $('todayLogs');
     if (!logs.length) {
       container.innerHTML = '<p style="color:var(--muted);text-align:center;">Aucun pointage aujourd\'hui</p>';
-      return;
+    } else {
+      var badgeClass = { entree: 'badge-in', debut_pause: 'badge-pause', fin_pause: 'badge-fin-pause', sortie: 'badge-out' };
+      var badgeLabel = { entree: 'Entrée', debut_pause: 'Début pause', fin_pause: 'Fin pause', sortie: 'Sortie' };
+      var html = '';
+      for (var i = 0; i < logs.length; i++) {
+        html += '<div class="log-item"><span class="badge ' + badgeClass[logs[i].action] + '">' +
+          badgeLabel[logs[i].action] + '</span><span>' + formatTime(logs[i].time) + '</span></div>';
+      }
+      container.innerHTML = html;
     }
-    var badgeClass = { entree: 'badge-in', debut_pause: 'badge-pause', fin_pause: 'badge-fin-pause', sortie: 'badge-out' };
-    var badgeLabel = { entree: 'Entrée', debut_pause: 'Début pause', fin_pause: 'Fin pause', sortie: 'Sortie' };
-    var html = '';
-    for (var i = 0; i < logs.length; i++) {
-      html += '<div class="log-item"><span class="badge ' + badgeClass[logs[i].action] + '">' +
-        badgeLabel[logs[i].action] + '</span><span>' + formatTime(logs[i].time) + '</span></div>';
+    await renderEmployeeWeekTable();
+  }
+
+  async function renderEmployeeWeekTable() {
+    var el = $('weekTable');
+    if (!el || !currentEmployee) return;
+    var monday = getMonday(todayStr());
+    var days = [];
+    for (var i = 0; i < 7; i++) {
+      var d = new Date(monday);
+      d.setDate(monday.getDate() + i);
+      days.push(d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'));
     }
-    container.innerHTML = html;
+    var allPunches = await getPunchesForWeek(currentEmployee.code, days);
+    var dayNames = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi', 'Dimanche'];
+    var totalMinutes = 0;
+    var html = '<table><thead><tr><th>Jour</th><th>Entrée</th><th>Sortie</th><th>Pauses</th><th>Heures</th></tr></thead><tbody>';
+    for (var idx = 0; idx < 7; idx++) {
+      var day = days[idx];
+      var dayPunches = [];
+      for (var p = 0; p < allPunches.length; p++) {
+        if (allPunches[p].date === day) dayPunches.push(allPunches[p]);
+      }
+      var entree = null, sortie = null, pauseMinutes = 0, pauseStart = null, pauseText = [];
+      for (var k = 0; k < dayPunches.length; k++) {
+        var punch = dayPunches[k];
+        if (punch.action === 'entree') entree = punch.time;
+        if (punch.action === 'sortie') sortie = punch.time;
+        if (punch.action === 'debut_pause') pauseStart = punch.time;
+        if (punch.action === 'fin_pause' && pauseStart) {
+          pauseMinutes += (new Date(punch.time) - new Date(pauseStart)) / 60000;
+          pauseText.push(formatTime(pauseStart) + '-' + formatTime(punch.time));
+          pauseStart = null;
+        }
+      }
+      var workMinutes = 0;
+      if (entree && sortie) {
+        workMinutes = (new Date(sortie) - new Date(entree)) / 60000 - pauseMinutes;
+        if (workMinutes < 0) workMinutes = 0;
+        totalMinutes += workMinutes;
+      }
+      var hoursStr = workMinutes > 0
+        ? Math.floor(workMinutes / 60) + 'h ' + String(Math.round(workMinutes % 60)).padStart(2, '0') + 'm'
+        : '—';
+      html += '<tr><td>' + dayNames[idx] + '<br><small>' + day.slice(8) + '/' + day.slice(5, 7) +
+        '</small></td><td>' + (entree ? formatTime(entree) : '—') + '</td><td>' +
+        (sortie ? formatTime(sortie) : '—') + '</td><td>' +
+        (pauseText.length ? pauseText.join(', ') : '—') + '</td><td>' + hoursStr + '</td></tr>';
+    }
+    var totalH = Math.floor(totalMinutes / 60);
+    var totalM = Math.round(totalMinutes % 60);
+    var rate = parseFloat(currentEmployee.salaire) || 0;
+    var totalPay = (totalMinutes / 60) * rate;
+    html += '<tr class="total-row"><td colspan="4">TOTAL SEMAINE</td><td>' +
+      totalH + 'h ' + String(totalM).padStart(2, '0') + 'm</td></tr>';
+    if (rate > 0) {
+      html += '<tr class="total-row"><td colspan="4">TOTAL PAIEMENT</td><td>' + totalPay.toFixed(2) + ' $</td></tr>';
+    }
+    html += '</tbody></table>';
+    html += '<p style="font-size:0.8rem;color:var(--muted);margin-top:8px;">Semaine du ' +
+      monday.toLocaleDateString('fr-FR') + ' au ' +
+      new Date(days[6] + 'T12:00:00').toLocaleDateString('fr-FR') + '</p>';
+    el.innerHTML = html;
   }
 
   async function doAction(action) {
-    if (!currentEmployee || !sb) return;
+    if (!currentEmployee) { showMessage('Connectez un employé d\'abord', true); return; }
+    if (!configured) { showMessage('Supabase non configuré', true); return; }
     var last = await getLastAction(currentEmployee.code);
     var allowed = {
       entree: [null, 'sortie'],
@@ -461,8 +531,14 @@
       fin_pause: ['debut_pause'],
       sortie: ['entree', 'fin_pause']
     };
+    var hints = {
+      entree: 'Déjà en service. Utilisez Pause ou Sortie.',
+      debut_pause: 'Faites d\'abord Entrée.',
+      fin_pause: 'Vous n\'êtes pas en pause.',
+      sortie: 'Faites d\'abord Entrée.'
+    };
     if (allowed[action].indexOf(last) === -1) {
-      showMessage('Action non autorisée', true);
+      showMessage(hints[action] || 'Action non autorisée', true);
       return;
     }
     var now = new Date();
@@ -505,8 +581,41 @@
     showScreen('employee');
   }
 
+  function resetWorkerForm() {
+    $('editOriginalCode').value = '';
+    $('newCode').value = '';
+    $('newName').value = '';
+    $('newJob').value = '';
+    $('newPhone').value = '';
+    $('newAdresse').value = '';
+    $('newSalaire').value = '';
+    $('newCode').readOnly = false;
+    $('workerFormTitle').textContent = 'Ajouter un employé';
+    $('btnAddWorker').textContent = 'Ajouter';
+    $('btnAddWorker').className = 'btn-success';
+    $('btnCancelEdit').classList.add('hidden');
+  }
+
+  function startEditWorker(w) {
+    $('editOriginalCode').value = w.code;
+    $('newCode').value = w.code;
+    $('newCode').readOnly = true;
+    $('newName').value = w.name || '';
+    $('newJob').value = w.job || '';
+    $('newPhone').value = w.phone || '';
+    $('newAdresse').value = w.adresse || '';
+    $('newSalaire').value = (w.salaire != null && w.salaire !== '') ? w.salaire : '';
+    $('workerFormTitle').textContent = 'Modifier un employé';
+    $('btnAddWorker').textContent = 'Enregistrer';
+    $('btnAddWorker').className = 'btn-primary';
+    $('btnCancelEdit').classList.remove('hidden');
+    try { $('workerFormTitle').scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e) {}
+  }
+
   async function addWorker() {
     if (!configured) { showMessage('Configurez Supabase d\'abord', true); return; }
+    var originalCode = ($('editOriginalCode').value || '').trim().toUpperCase();
+    var isEdit = !!originalCode;
     var code = $('newCode').value.trim().toUpperCase();
     var name = $('newName').value.trim();
     var job = $('newJob').value.trim();
@@ -517,20 +626,28 @@
     if (!code || !name) { showMessage('Code et nom obligatoires', true); return; }
 
     try {
-      await api('/workers', {
-        method: 'POST',
-        prefer: 'return=minimal',
-        body: { code: code, name: name, job: job, phone: phone, adresse: adresse, salaire: salaire }
-      });
+      if (isEdit) {
+        await api('/workers?code=eq.' + encodeURIComponent(originalCode), {
+          method: 'PATCH',
+          prefer: 'return=minimal',
+          body: { name: name, job: job, phone: phone, adresse: adresse, salaire: salaire }
+        });
+        showMessage('Employé modifié');
+      } else {
+        await api('/workers', {
+          method: 'POST',
+          prefer: 'return=minimal',
+          body: { code: code, name: name, job: job, phone: phone, adresse: adresse, salaire: salaire }
+        });
+        showMessage('Employé ajouté');
+      }
     } catch (e) {
       var m = e.message || '';
       if (m.indexOf('duplicate') !== -1 || m.indexOf('unique') !== -1) showMessage('Code déjà utilisé', true);
       else showMessage('Erreur: ' + m, true);
       return;
     }
-    $('newCode').value = ''; $('newName').value = ''; $('newJob').value = '';
-    $('newPhone').value = ''; $('newAdresse').value = ''; $('newSalaire').value = '';
-    showMessage('Employé ajouté');
+    resetWorkerForm();
     await renderWorkersList();
     await fillReportWorkers();
     await fillPdfWorkers();
@@ -542,6 +659,7 @@
       await api('/punches?code=eq.' + encodeURIComponent(code), { method: 'DELETE', prefer: 'return=minimal' });
       await api('/workers?code=eq.' + encodeURIComponent(code), { method: 'DELETE', prefer: 'return=minimal' });
       showMessage('Supprimé');
+      if (($('editOriginalCode').value || '').toUpperCase() === code) resetWorkerForm();
     } catch (e) {
       showMessage('Erreur: ' + e.message, true);
     }
@@ -564,13 +682,24 @@
       html += '<div class="worker-row"><div><strong>' + w.name + '</strong><br><small>' +
         w.code + ' • ' + (w.job || '—') + ' • ' + (w.phone || '—') +
         '<br>' + (w.adresse || '—') + ' • ' + salStr +
-        '</small></div><button type="button" class="btn-danger btn-small del-btn" data-code="' +
-        w.code + '">Suppr.</button></div>';
+        '</small></div><div style="display:flex;flex-direction:column;gap:4px;">' +
+        '<button type="button" class="btn-outline btn-small edit-btn" data-code="' + w.code + '">Modifier</button>' +
+        '<button type="button" class="btn-danger btn-small del-btn" data-code="' + w.code + '">Suppr.</button>' +
+        '</div></div>';
     }
     el.innerHTML = html;
-    var btns = el.querySelectorAll('.del-btn');
-    for (var j = 0; j < btns.length; j++) {
-      btns[j].onclick = function () { deleteWorker(this.getAttribute('data-code')); };
+    var workersByCode = {};
+    for (var k = 0; k < workers.length; k++) workersByCode[workers[k].code] = workers[k];
+    var editBtns = el.querySelectorAll('.edit-btn');
+    for (var j = 0; j < editBtns.length; j++) {
+      editBtns[j].onclick = function () {
+        var c = this.getAttribute('data-code');
+        if (workersByCode[c]) startEditWorker(workersByCode[c]);
+      };
+    }
+    var delBtns = el.querySelectorAll('.del-btn');
+    for (var d = 0; d < delBtns.length; d++) {
+      delBtns[d].onclick = function () { deleteWorker(this.getAttribute('data-code')); };
     }
   }
 
@@ -712,6 +841,7 @@
       tabBtns[i].onclick = function () { showAdminTab(this.getAttribute('data-tab')); };
     }
     $('btnAddWorker').onclick = function () { addWorker(); };
+    $('btnCancelEdit').onclick = function () { resetWorkerForm(); };
     $('btnGenerateReport').onclick = function () { generateReport(); };
     $('btnExportPdf').onclick = function () { exportPdf(); };
     $('btnTestDb').onclick = function () { testConnection(); };
