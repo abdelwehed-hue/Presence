@@ -194,9 +194,26 @@
           <input type="date" id="reportWeek">
           <button type="button" class="btn-primary" id="btnGenerateReport">Générer le rapport</button>
         </div>
+        <div class="card">
+          <h2>Fiche de paie</h2>
+          <label>Employé</label>
+          <select id="paieWorker"></select>
+          <label>Date de référence (dans la période)</label>
+          <input type="date" id="paieWeek">
+          <label>Période</label>
+          <select id="paiePeriod">
+            <option value="1">1 semaine</option>
+            <option value="2">2 semaines</option>
+          </select>
+          <button type="button" class="btn-success" id="btnGeneratePaie">Générer fiche de paie</button>
+          <button type="button" class="btn-outline" id="btnPrintPaie">Imprimer / PDF</button>
+        </div>
         <div class="card hidden" id="reportResult">
           <h2 id="reportTitle"></h2>
           <div id="reportContent"></div>
+        </div>
+        <div class="card hidden" id="paieResult">
+          <div id="paieContent"></div>
         </div>
       </div>
 
@@ -204,6 +221,26 @@
         <div class="card">
           <h2>Connexion base de données</h2>
           <button type="button" class="btn-outline" id="btnTestDb">Tester la connexion Supabase</button>
+        </div>
+        <div class="card">
+          <h2>Entreprise (fiche de paie QC)</h2>
+          <label>Nom de l'entreprise</label>
+          <input type="text" id="coName" placeholder="Ex: Quebec Inc.">
+          <label>N° employeur</label>
+          <input type="text" id="coEmployerNo" placeholder="Ex: 0024-P 9316-8789">
+          <label>Adresse</label>
+          <input type="text" id="coAddress" placeholder="Adresse, ville, QC, code postal">
+          <label>Retenue fédérale %</label>
+          <input type="number" id="coFedTax" step="0.01" min="0" max="50" placeholder="10">
+          <label>Retenue Québec %</label>
+          <input type="number" id="coQueTax" step="0.01" min="0" max="50" placeholder="12">
+          <label>R.R.Q. (employé) %</label>
+          <input type="number" id="coRrq" step="0.01" min="0" max="20" placeholder="6.40">
+          <label>A.E. / C.A.E. (employé) %</label>
+          <input type="number" id="coAe" step="0.01" min="0" max="10" placeholder="1.63">
+          <label>R.Q.A.P. (employé) %</label>
+          <input type="number" id="coRqap" step="0.01" min="0" max="5" placeholder="0.494">
+          <button type="button" class="btn-success" id="btnSaveCompany">Enregistrer paramètres</button>
         </div>
         <div class="card">
           <h2>Rapport PDF</h2>
@@ -296,6 +333,7 @@
       renderWorkersList();
       fillReportWorkers();
       fillPdfWorkers();
+      loadCompanySettings();
     }
   }
 
@@ -710,6 +748,7 @@
       html += '<option value="' + workers[i].code + '">' + workers[i].name + ' (' + workers[i].code + ')</option>';
     }
     $('reportWorker').innerHTML = html;
+    if ($('paieWorker')) $('paieWorker').innerHTML = html;
   }
 
   async function fillPdfWorkers() {
@@ -720,6 +759,278 @@
     }
     var sel = $('pdfWorker');
     if (sel) sel.innerHTML = html;
+  }
+
+  function formatHoursMinutes(totalMinutes) {
+    var h = Math.floor(totalMinutes / 60);
+    var m = Math.round(totalMinutes % 60);
+    return h + 'h ' + String(m).padStart(2, '0') + 'm';
+  }
+
+  async function computeWeekData(code, weekInput) {
+    var monday = getMonday(weekInput);
+    var days = [];
+    for (var i = 0; i < 7; i++) {
+      var d = new Date(monday);
+      d.setDate(monday.getDate() + i);
+      days.push(d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'));
+    }
+    var allPunches = await getPunchesForWeek(code, days);
+    var dayNames = ['Lundi', 'Mardi', 'Mercredi', 'Jeudi', 'Vendredi', 'Samedi', 'Dimanche'];
+    var totalMinutes = 0;
+    var rows = [];
+    for (var idx = 0; idx < 7; idx++) {
+      var day = days[idx];
+      var dayPunches = allPunches.filter(function (p) { return p.date === day; });
+      var entree = null, sortie = null, pauseMinutes = 0, pauseStart = null, pauseText = [];
+      for (var k = 0; k < dayPunches.length; k++) {
+        var p = dayPunches[k];
+        if (p.action === 'entree') entree = p.time;
+        if (p.action === 'sortie') sortie = p.time;
+        if (p.action === 'debut_pause') pauseStart = p.time;
+        if (p.action === 'fin_pause' && pauseStart) {
+          pauseMinutes += (new Date(p.time) - new Date(pauseStart)) / 60000;
+          pauseText.push(formatTime(pauseStart) + '-' + formatTime(p.time));
+          pauseStart = null;
+        }
+      }
+      var workMinutes = 0;
+      if (entree && sortie) {
+        workMinutes = (new Date(sortie) - new Date(entree)) / 60000 - pauseMinutes;
+        if (workMinutes < 0) workMinutes = 0;
+        totalMinutes += workMinutes;
+      }
+      rows.push({
+        name: dayNames[idx],
+        date: day,
+        entree: entree,
+        sortie: sortie,
+        pauses: pauseText,
+        minutes: workMinutes
+      });
+    }
+    return {
+      monday: monday,
+      end: new Date(days[6] + 'T12:00:00'),
+      days: days,
+      rows: rows,
+      totalMinutes: totalMinutes
+    };
+  }
+
+  function loadCompanySettings() {
+    try {
+      var s = JSON.parse(localStorage.getItem('paie_company') || '{}');
+      if ($('coName')) $('coName').value = s.name || '';
+      if ($('coEmployerNo')) $('coEmployerNo').value = s.employerNo || '';
+      if ($('coAddress')) $('coAddress').value = s.address || '';
+      if ($('coFedTax')) $('coFedTax').value = s.fedTax != null ? s.fedTax : 10;
+      if ($('coQueTax')) $('coQueTax').value = s.queTax != null ? s.queTax : 12;
+      if ($('coRrq')) $('coRrq').value = s.rrq != null ? s.rrq : 6.40;
+      if ($('coAe')) $('coAe').value = s.ae != null ? s.ae : 1.63;
+      if ($('coRqap')) $('coRqap').value = s.rqap != null ? s.rqap : 0.494;
+    } catch (e) {}
+  }
+
+  function saveCompanySettings() {
+    var s = {
+      name: ($('coName') && $('coName').value) || '',
+      employerNo: ($('coEmployerNo') && $('coEmployerNo').value) || '',
+      address: ($('coAddress') && $('coAddress').value) || '',
+      fedTax: parseFloat($('coFedTax') && $('coFedTax').value) || 0,
+      queTax: parseFloat($('coQueTax') && $('coQueTax').value) || 0,
+      rrq: parseFloat($('coRrq') && $('coRrq').value) || 0,
+      ae: parseFloat($('coAe') && $('coAe').value) || 0,
+      rqap: parseFloat($('coRqap') && $('coRqap').value) || 0
+    };
+    localStorage.setItem('paie_company', JSON.stringify(s));
+    showMessage('Paramètres entreprise enregistrés');
+  }
+
+  function getCompanySettings() {
+    try {
+      return JSON.parse(localStorage.getItem('paie_company') || '{}');
+    } catch (e) {
+      return {};
+    }
+  }
+
+  function money(n) {
+    return (Math.round(n * 100) / 100).toFixed(2);
+  }
+
+  async function generateFichePaie() {
+    var code = $('paieWorker').value;
+    var weekInput = $('paieWeek').value;
+    var period = parseInt(($('paiePeriod') && $('paiePeriod').value) || '1', 10);
+    if (!code || !weekInput) { showMessage('Choisissez employé et date', true); return; }
+    var workers = await getWorkers();
+    var emp = null;
+    for (var i = 0; i < workers.length; i++) {
+      if (workers[i].code === code) { emp = workers[i]; break; }
+    }
+    if (!emp) { showMessage('Employé introuvable', true); return; }
+
+    var rate = parseFloat(emp.salaire) || 0;
+    var weeksData = [];
+    var firstMonday = getMonday(weekInput);
+    var firstDateStr = firstMonday.getFullYear() + '-' +
+      String(firstMonday.getMonth() + 1).padStart(2, '0') + '-' +
+      String(firstMonday.getDate()).padStart(2, '0');
+    weeksData.push(await computeWeekData(code, firstDateStr));
+    if (period === 2) {
+      var second = new Date(firstMonday);
+      second.setDate(firstMonday.getDate() + 7);
+      var secondStr = second.getFullYear() + '-' +
+        String(second.getMonth() + 1).padStart(2, '0') + '-' +
+        String(second.getDate()).padStart(2, '0');
+      weeksData.push(await computeWeekData(code, secondStr));
+    }
+
+    var totalMinutes = 0;
+    for (var w = 0; w < weeksData.length; w++) totalMinutes += weeksData[w].totalMinutes;
+    var hours = totalMinutes / 60;
+    var gross = hours * rate;
+    var co = getCompanySettings();
+    var fedPct = co.fedTax != null ? Number(co.fedTax) : 10;
+    var quePct = co.queTax != null ? Number(co.queTax) : 12;
+    var rrqPct = co.rrq != null ? Number(co.rrq) : 6.40;
+    var aePct = co.ae != null ? Number(co.ae) : 1.63;
+    var rqapPct = co.rqap != null ? Number(co.rqap) : 0.494;
+
+    var dedFed = gross * fedPct / 100;
+    var dedQue = gross * quePct / 100;
+    var dedRrq = gross * rrqPct / 100;
+    var dedAe = gross * aePct / 100;
+    var dedRqap = gross * rqapPct / 100;
+    var totalDed = dedFed + dedQue + dedRrq + dedAe + dedRqap;
+    var net = gross - totalDed;
+
+    var startLabel = weeksData[0].monday.toLocaleDateString('fr-CA');
+    var endLabel = weeksData[weeksData.length - 1].end.toLocaleDateString('fr-CA');
+    var payDate = new Date().toLocaleDateString('fr-CA');
+    var periodLabel = period === 2 ? '2 semaines' : '1 semaine';
+    var coName = co.name || 'Entreprise';
+    var empNo = co.employerNo || '—';
+    var coAddr = co.address || '';
+    var seq = 'S' + Date.now().toString().slice(-8);
+
+    var css =
+      '.paie-wrap{font-family:Arial,Helvetica,sans-serif;font-size:11px;color:#111;background:#fff}' +
+      '.paie-top{display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-bottom:8px;font-size:10px}' +
+      '.paie-title{background:#4a7ab5;color:#fff;text-align:center;padding:4px 8px;font-weight:700;font-size:12px;margin:6px 0}' +
+      '.paie-grid{display:grid;grid-template-columns:1fr 1fr;gap:6px}' +
+      '@media(max-width:520px){.paie-grid{grid-template-columns:1fr}}' +
+      '.paie-box{border:1px solid #4a7ab5}' +
+      '.paie-box h4{background:#4a7ab5;color:#fff;margin:0;padding:4px 6px;font-size:10px;text-align:center}' +
+      '.paie-table{width:100%;border-collapse:collapse;font-size:10px}' +
+      '.paie-table th,.paie-table td{border:1px solid #9ab;padding:3px 4px;text-align:right}' +
+      '.paie-table th{background:#e8eef6;text-align:center;font-size:9px}' +
+      '.paie-table td:first-child,.paie-table th:first-child{text-align:left}' +
+      '.paie-sum{display:grid;grid-template-columns:1.2fr 1fr;gap:6px;margin-top:8px}' +
+      '.paie-sum table th{background:#4a7ab5;color:#fff}' +
+      '.paie-foot{margin-top:10px;font-size:9px;color:#444;border-top:1px solid #ccc;padding-top:6px}' +
+      '.paie-logo{text-align:right;font-size:16px;font-weight:700;color:#1a73e8;margin-top:8px}' +
+      '.paie-note{font-size:9px;color:#666;margin-top:6px}';
+
+    var html = '<div class="paie-wrap"><style>' + css + '</style>';
+
+    // Header
+    html += '<div class="paie-top">';
+    html += '<div><strong>' + (emp.name || '').toUpperCase() + '</strong><br>Matricule ' + emp.code + '</div>';
+    html += '<div style="text-align:right">N° service<br>N° employeur ' + empNo + '</div>';
+    html += '<div>Début période ' + startLabel + '<br>Fin période ' + endLabel + '</div>';
+    html += '<div style="text-align:right">Paiement ' + payDate + '<br>Séquence ' + seq + '</div>';
+    html += '</div>';
+
+    html += '<div class="paie-title">STATEMENT OF EARNINGS / BULLETIN DE PAIE — ' + periodLabel + '</div>';
+
+    html += '<div class="paie-grid">';
+
+    // Earnings
+    html += '<div class="paie-box"><h4>GAINS / EARNINGS</h4>';
+    html += '<table class="paie-table"><thead><tr>' +
+      '<th>TYPE</th><th>HEURES<br>HOURS</th><th>TAUX<br>RATE</th><th>MONTANT<br>AMOUNT</th></tr></thead><tbody>';
+    html += '<tr><td>HRS REG</td><td>' + hours.toFixed(2) + '</td><td>' +
+      (rate > 0 ? money(rate) : '—') + '</td><td>' + money(gross) + '</td></tr>';
+    html += '<tr style="font-weight:700;background:#f0f4fa"><td colspan="3">TOTAL GAINS / GROSS</td><td>' +
+      money(gross) + '</td></tr>';
+    html += '</tbody></table></div>';
+
+    // Deductions
+    html += '<div class="paie-box"><h4>RETENUES DE L\'EMPLOYÉ / EMPLOYEE DEDUCTIONS</h4>';
+    html += '<table class="paie-table"><thead><tr>' +
+      '<th>TYPE</th><th>COURANT<br>CURRENT</th></tr></thead><tbody>';
+    html += '<tr><td>IMP.FED.</td><td>' + money(dedFed) + '</td></tr>';
+    html += '<tr><td>IMP.QUE.</td><td>' + money(dedQue) + '</td></tr>';
+    html += '<tr><td>R.R.Q.</td><td>' + money(dedRrq) + '</td></tr>';
+    html += '<tr><td>C.A.E. / A.E.</td><td>' + money(dedAe) + '</td></tr>';
+    html += '<tr><td>R.Q.A.P.</td><td>' + money(dedRqap) + '</td></tr>';
+    html += '<tr style="font-weight:700;background:#f0f4fa"><td>TOTAL RETENUES</td><td>' +
+      money(totalDed) + '</td></tr>';
+    html += '</tbody></table></div>';
+
+    html += '</div>'; // grid
+
+    // Detail hours by day
+    html += '<div class="paie-box" style="margin-top:8px"><h4>DÉTAIL DES HEURES / HOURS DETAIL</h4>';
+    html += '<table class="paie-table"><thead><tr><th>Jour</th><th>Date</th><th>Entrée</th><th>Sortie</th><th>Pauses</th><th>Heures</th></tr></thead><tbody>';
+    for (var wi = 0; wi < weeksData.length; wi++) {
+      var wd = weeksData[wi];
+      for (var r = 0; r < wd.rows.length; r++) {
+        var row = wd.rows[r];
+        if (row.minutes <= 0 && !row.entree) continue;
+        html += '<tr><td style="text-align:left">' + row.name + '</td><td>' + row.date + '</td><td>' +
+          (row.entree ? formatTime(row.entree) : '—') + '</td><td>' +
+          (row.sortie ? formatTime(row.sortie) : '—') + '</td><td>' +
+          (row.pauses.length ? row.pauses.join(', ') : '—') + '</td><td>' +
+          (row.minutes > 0 ? (row.minutes / 60).toFixed(2) : '—') + '</td></tr>';
+      }
+    }
+    html += '</tbody></table></div>';
+
+    // Summary
+    html += '<div class="paie-sum">';
+    html += '<div class="paie-box"><h4>SUMMARY / SOMMAIRE</h4>';
+    html += '<table class="paie-table"><thead><tr><th></th><th>PAIE BRUTE<br>GROSS PAY</th><th>RETENUES<br>DEDUCTIONS</th><th>PAIE NETTE<br>NET PAY</th></tr></thead><tbody>';
+    html += '<tr><td style="text-align:left"><strong>Courant / Current</strong></td><td>' +
+      money(gross) + '</td><td>' + money(totalDed) + '</td><td><strong>' + money(net) + '</strong></td></tr>';
+    html += '</tbody></table></div>';
+    html += '<div class="paie-box"><h4>PAIE NETTE / NET PAY</h4>';
+    html += '<div style="padding:12px;text-align:center;font-size:18px;font-weight:700;color:#0d904f">' +
+      money(net) + ' $</div>';
+    html += '<div style="padding:0 8px 8px;font-size:10px;text-align:center">Période du ' +
+      startLabel + ' au ' + endLabel + '</div></div>';
+    html += '</div>';
+
+    html += '<div class="paie-foot">';
+    html += '<strong>' + coName + '</strong>';
+    if (empNo && empNo !== '—') html += ' — N° employeur ' + empNo;
+    if (coAddr) html += '<br>' + coAddr;
+    html += '<br>Employé : ' + emp.name + ' (' + emp.code + ')';
+    if (emp.job) html += ' — ' + emp.job;
+    if (emp.adresse) html += '<br>' + emp.adresse;
+    html += '</div>';
+    html += '<p class="paie-note">Document interne de suivi. Les retenues sont estimatives selon les % configurés dans Réglages (pas un calcul fiscal officiel Revenu Québec / ARC). Vérifiez avec votre logiciel de paie officiel si requis.</p>';
+    html += '<div class="paie-logo">Pointage Employés</div>';
+    html += '</div>';
+
+    $('paieContent').innerHTML = html;
+    $('paieResult').classList.remove('hidden');
+    showMessage('Fiche de paie (style QC) générée');
+  }
+
+  function printFichePaie() {
+    var content = $('paieContent') && $('paieContent').innerHTML;
+    if (!content) { showMessage('Générez d\'abord la fiche de paie', true); return; }
+    var w = window.open('', '_blank', 'width=900,height=700');
+    if (!w) { showMessage('Autorisez les pop-ups', true); return; }
+    w.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Fiche de paie</title>' +
+      '<style>body{margin:12px;background:#fff}@media print{body{margin:0}}</style></head><body>' +
+      content +
+      '<script>window.onload=function(){setTimeout(function(){window.print()},400)}<\/script></body></html>');
+    w.document.close();
+    showMessage('Choisissez « Enregistrer en PDF » dans l\'impression');
   }
 
   async function generateReport() {
@@ -844,11 +1155,15 @@
     $('btnCancelEdit').onclick = function () { resetWorkerForm(); };
     $('btnGenerateReport').onclick = function () { generateReport(); };
     $('btnExportPdf').onclick = function () { exportPdf(); };
+    if ($('btnGeneratePaie')) $('btnGeneratePaie').onclick = function () { generateFichePaie(); };
+    if ($('btnPrintPaie')) $('btnPrintPaie').onclick = function () { printFichePaie(); };
+    if ($('btnSaveCompany')) $('btnSaveCompany').onclick = function () { saveCompanySettings(); };
     $('btnTestDb').onclick = function () { testConnection(); };
     $('btnLogoutAdmin').onclick = logoutAdmin;
 
     $('reportWeek').value = todayStr();
     if ($('pdfWeek')) $('pdfWeek').value = todayStr();
+    if ($('paieWeek')) $('paieWeek').value = todayStr();
   }
 
   if (document.readyState === 'loading') {
