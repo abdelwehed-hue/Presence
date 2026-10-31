@@ -231,15 +231,18 @@
           <label>Adresse</label>
           <input type="text" id="coAddress" placeholder="Adresse, ville, QC, code postal">
           <label>Retenue fédérale %</label>
-          <input type="number" id="coFedTax" step="0.01" min="0" max="50" placeholder="10">
+          <input type="number" id="coFedTax" step="0.01" min="0" max="50" placeholder="4.15">
           <label>Retenue Québec %</label>
-          <input type="number" id="coQueTax" step="0.01" min="0" max="50" placeholder="12">
+          <input type="number" id="coQueTax" step="0.01" min="0" max="50" placeholder="4.77">
           <label>R.R.Q. (employé) %</label>
-          <input type="number" id="coRrq" step="0.01" min="0" max="20" placeholder="6.40">
+          <input type="number" id="coRrq" step="0.01" min="0" max="20" placeholder="5.60">
           <label>A.E. / C.A.E. (employé) %</label>
-          <input type="number" id="coAe" step="0.01" min="0" max="10" placeholder="1.63">
+          <input type="number" id="coAe" step="0.01" min="0" max="10" placeholder="1.30">
           <label>R.Q.A.P. (employé) %</label>
-          <input type="number" id="coRqap" step="0.01" min="0" max="5" placeholder="0.494">
+          <input type="number" id="coRqap" step="0.01" min="0" max="5" placeholder="0.43">
+          <label>Vacances acquises %</label>
+          <input type="number" id="coVac" step="0.01" min="0" max="10" placeholder="4.00">
+          <p style="font-size:0.8rem;color:var(--muted);margin:-4px 0 10px;">QC : souvent 4 % (2 semaines) ou 6 % (3 semaines). Les vacances sont affichées comme acquises, non déduites du net (comme sur votre bulletin).</p>
           <button type="button" class="btn-success" id="btnSaveCompany">Enregistrer paramètres</button>
         </div>
         <div class="card">
@@ -824,11 +827,13 @@
       if ($('coName')) $('coName').value = s.name || '';
       if ($('coEmployerNo')) $('coEmployerNo').value = s.employerNo || '';
       if ($('coAddress')) $('coAddress').value = s.address || '';
-      if ($('coFedTax')) $('coFedTax').value = s.fedTax != null ? s.fedTax : 10;
-      if ($('coQueTax')) $('coQueTax').value = s.queTax != null ? s.queTax : 12;
-      if ($('coRrq')) $('coRrq').value = s.rrq != null ? s.rrq : 6.40;
-      if ($('coAe')) $('coAe').value = s.ae != null ? s.ae : 1.63;
-      if ($('coRqap')) $('coRqap').value = s.rqap != null ? s.rqap : 0.494;
+      // Défauts calqués sur un bulletin QC réel (ex. ~16,25 % retenues sur brut)
+      if ($('coFedTax')) $('coFedTax').value = s.fedTax != null ? s.fedTax : 4.15;
+      if ($('coQueTax')) $('coQueTax').value = s.queTax != null ? s.queTax : 4.77;
+      if ($('coRrq')) $('coRrq').value = s.rrq != null ? s.rrq : 5.60;
+      if ($('coAe')) $('coAe').value = s.ae != null ? s.ae : 1.30;
+      if ($('coRqap')) $('coRqap').value = s.rqap != null ? s.rqap : 0.43;
+      if ($('coVac')) $('coVac').value = s.vac != null ? s.vac : 4.00;
     } catch (e) {}
   }
 
@@ -841,7 +846,8 @@
       queTax: parseFloat($('coQueTax') && $('coQueTax').value) || 0,
       rrq: parseFloat($('coRrq') && $('coRrq').value) || 0,
       ae: parseFloat($('coAe') && $('coAe').value) || 0,
-      rqap: parseFloat($('coRqap') && $('coRqap').value) || 0
+      rqap: parseFloat($('coRqap') && $('coRqap').value) || 0,
+      vac: parseFloat($('coVac') && $('coVac').value) || 0
     };
     localStorage.setItem('paie_company', JSON.stringify(s));
     showMessage('Paramètres entreprise enregistrés');
@@ -890,20 +896,27 @@
     var totalMinutes = 0;
     for (var w = 0; w < weeksData.length; w++) totalMinutes += weeksData[w].totalMinutes;
     var hours = totalMinutes / 60;
+    // Même logique que le bulletin QC : Salaire brut = heures × taux
     var gross = hours * rate;
     var co = getCompanySettings();
-    var fedPct = co.fedTax != null ? Number(co.fedTax) : 10;
-    var quePct = co.queTax != null ? Number(co.queTax) : 12;
-    var rrqPct = co.rrq != null ? Number(co.rrq) : 6.40;
-    var aePct = co.ae != null ? Number(co.ae) : 1.63;
-    var rqapPct = co.rqap != null ? Number(co.rqap) : 0.494;
+    // % calqués sur bulletin réel (ex. 1207$ → retenues 196,10$ ≈ 16,25%)
+    var fedPct = co.fedTax != null ? Number(co.fedTax) : 4.15;
+    var quePct = co.queTax != null ? Number(co.queTax) : 4.77;
+    var rrqPct = co.rrq != null ? Number(co.rrq) : 5.60;
+    var aePct = co.ae != null ? Number(co.ae) : 1.30;
+    var rqapPct = co.rqap != null ? Number(co.rqap) : 0.43;
+    var vacPct = co.vac != null ? Number(co.vac) : 4.00;
 
-    var dedFed = gross * fedPct / 100;
-    var dedQue = gross * quePct / 100;
-    var dedRrq = gross * rrqPct / 100;
+    // Retenues = % du salaire brut (comme A-E, RQAP, RRQ, Impôt, Impôt Qc sur votre fiche)
     var dedAe = gross * aePct / 100;
     var dedRqap = gross * rqapPct / 100;
-    var totalDed = dedFed + dedQue + dedRrq + dedAe + dedRqap;
+    var dedRrq = gross * rrqPct / 100;
+    var dedFed = gross * fedPct / 100;
+    var dedQue = gross * quePct / 100;
+    var totalDed = dedAe + dedRqap + dedRrq + dedFed + dedQue;
+    // Vacances acquises = % du brut (affichées, NON déduites du net — comme votre exemple)
+    var vacAcquises = gross * vacPct / 100;
+    // Salaire net = brut − retenues (sans soustraire les vacances)
     var net = gross - totalDed;
 
     var startLabel = weeksData[0].monday.toLocaleDateString('fr-CA');
@@ -947,27 +960,28 @@
 
     html += '<div class="paie-grid">';
 
-    // Earnings
-    html += '<div class="paie-box"><h4>GAINS / EARNINGS</h4>';
+    // Gains — même structure que le bulletin QC
+    html += '<div class="paie-box"><h4>GAINS</h4>';
     html += '<table class="paie-table"><thead><tr>' +
-      '<th>TYPE</th><th>HEURES<br>HOURS</th><th>TAUX<br>RATE</th><th>MONTANT<br>AMOUNT</th></tr></thead><tbody>';
-    html += '<tr><td>HRS REG</td><td>' + hours.toFixed(2) + '</td><td>' +
-      (rate > 0 ? money(rate) : '—') + '</td><td>' + money(gross) + '</td></tr>';
-    html += '<tr style="font-weight:700;background:#f0f4fa"><td colspan="3">TOTAL GAINS / GROSS</td><td>' +
-      money(gross) + '</td></tr>';
+      '<th>TYPE</th><th>HEURES</th><th>TAUX</th><th>PÉRIODE</th></tr></thead><tbody>';
+    html += '<tr><td>Régulières @ ' + (rate > 0 ? money(rate) : '—') + '/Hr</td><td>' +
+      hours.toFixed(2) + '</td><td>' + (rate > 0 ? money(rate) : '—') + '</td><td>' + money(gross) + '</td></tr>';
+    html += '<tr style="font-weight:700"><td colspan="3">Salaire brut</td><td>' + money(gross) + '</td></tr>';
+    html += '<tr style="font-weight:700"><td colspan="3">Brut payé</td><td>' + money(gross) + '</td></tr>';
+    html += '<tr><td colspan="3">Vacances acquises (' + vacPct.toFixed(2) + '%)</td><td>' + money(vacAcquises) + '</td></tr>';
     html += '</tbody></table></div>';
 
-    // Deductions
-    html += '<div class="paie-box"><h4>RETENUES DE L\'EMPLOYÉ / EMPLOYEE DEDUCTIONS</h4>';
+    // Retenues — ordre comme le bulletin : A-E, RQAP, RRQ, Impôt, Impôt Qc
+    html += '<div class="paie-box"><h4>RETENUES</h4>';
     html += '<table class="paie-table"><thead><tr>' +
-      '<th>TYPE</th><th>COURANT<br>CURRENT</th></tr></thead><tbody>';
-    html += '<tr><td>IMP.FED.</td><td>' + money(dedFed) + '</td></tr>';
-    html += '<tr><td>IMP.QUE.</td><td>' + money(dedQue) + '</td></tr>';
-    html += '<tr><td>R.R.Q.</td><td>' + money(dedRrq) + '</td></tr>';
-    html += '<tr><td>C.A.E. / A.E.</td><td>' + money(dedAe) + '</td></tr>';
-    html += '<tr><td>R.Q.A.P.</td><td>' + money(dedRqap) + '</td></tr>';
-    html += '<tr style="font-weight:700;background:#f0f4fa"><td>TOTAL RETENUES</td><td>' +
-      money(totalDed) + '</td></tr>';
+      '<th>TYPE</th><th>PÉRIODE</th></tr></thead><tbody>';
+    html += '<tr><td>A-E</td><td>' + money(dedAe) + '</td></tr>';
+    html += '<tr><td>RQAP</td><td>' + money(dedRqap) + '</td></tr>';
+    html += '<tr><td>RRQ</td><td>' + money(dedRrq) + '</td></tr>';
+    html += '<tr><td>Impôt</td><td>' + money(dedFed) + '</td></tr>';
+    html += '<tr><td>Impôt Qc</td><td>' + money(dedQue) + '</td></tr>';
+    html += '<tr style="font-weight:700;background:#f0f4fa"><td>Retenues</td><td>' + money(totalDed) + '</td></tr>';
+    html += '<tr style="font-weight:700;background:#e8f5e9"><td>Salaire net</td><td>' + money(net) + '</td></tr>';
     html += '</tbody></table></div>';
 
     html += '</div>'; // grid
@@ -993,8 +1007,9 @@
     html += '<div class="paie-sum">';
     html += '<div class="paie-box"><h4>SUMMARY / SOMMAIRE</h4>';
     html += '<table class="paie-table"><thead><tr><th></th><th>PAIE BRUTE<br>GROSS PAY</th><th>RETENUES<br>DEDUCTIONS</th><th>PAIE NETTE<br>NET PAY</th></tr></thead><tbody>';
-    html += '<tr><td style="text-align:left"><strong>Courant / Current</strong></td><td>' +
+    html += '<tr><td style="text-align:left"><strong>Courant</strong></td><td>' +
       money(gross) + '</td><td>' + money(totalDed) + '</td><td><strong>' + money(net) + '</strong></td></tr>';
+    html += '<tr><td style="text-align:left">Vacances acquises</td><td colspan="3">' + money(vacAcquises) + '</td></tr>';
     html += '</tbody></table></div>';
     html += '<div class="paie-box"><h4>PAIE NETTE / NET PAY</h4>';
     html += '<div style="padding:12px;text-align:center;font-size:18px;font-weight:700;color:#0d904f">' +
@@ -1011,7 +1026,7 @@
     if (emp.job) html += ' — ' + emp.job;
     if (emp.adresse) html += '<br>' + emp.adresse;
     html += '</div>';
-    html += '<p class="paie-note">Document interne de suivi. Les retenues sont estimatives selon les % configurés dans Réglages (pas un calcul fiscal officiel Revenu Québec / ARC). Vérifiez avec votre logiciel de paie officiel si requis.</p>';
+    html += '<p class="paie-note">Calculs : Salaire brut = heures × taux. Retenues = % du brut (A-E, RQAP, RRQ, Impôt, Impôt Qc). Vacances acquises = % du brut (non déduites du net). Les % sont réglables dans Réglages — calqués par défaut sur un bulletin QC type. Ce n\'est pas un calcul fiscal officiel ARC / Revenu Québec.</p>';
     html += '<div class="paie-logo">Pointage Employés</div>';
     html += '</div>';
 
