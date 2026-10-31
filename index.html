@@ -986,23 +986,6 @@
 
     html += '</div>'; // grid
 
-    // Detail hours by day
-    html += '<div class="paie-box" style="margin-top:8px"><h4>DÉTAIL DES HEURES / HOURS DETAIL</h4>';
-    html += '<table class="paie-table"><thead><tr><th>Jour</th><th>Date</th><th>Entrée</th><th>Sortie</th><th>Pauses</th><th>Heures</th></tr></thead><tbody>';
-    for (var wi = 0; wi < weeksData.length; wi++) {
-      var wd = weeksData[wi];
-      for (var r = 0; r < wd.rows.length; r++) {
-        var row = wd.rows[r];
-        if (row.minutes <= 0 && !row.entree) continue;
-        html += '<tr><td style="text-align:left">' + row.name + '</td><td>' + row.date + '</td><td>' +
-          (row.entree ? formatTime(row.entree) : '—') + '</td><td>' +
-          (row.sortie ? formatTime(row.sortie) : '—') + '</td><td>' +
-          (row.pauses.length ? row.pauses.join(', ') : '—') + '</td><td>' +
-          (row.minutes > 0 ? (row.minutes / 60).toFixed(2) : '—') + '</td></tr>';
-      }
-    }
-    html += '</tbody></table></div>';
-
     // Summary
     html += '<div class="paie-sum">';
     html += '<div class="paie-box"><h4>SUMMARY / SOMMAIRE</h4>';
